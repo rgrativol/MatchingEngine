@@ -20,6 +20,7 @@ import com.lykke.matching.engine.order.OrderStatus.NoLiquidity
 import com.lykke.matching.engine.order.OrderStatus.NotEnoughFunds
 import com.lykke.matching.engine.order.OrderStatus.Processing
 import com.lykke.matching.engine.order.OrderStatus.ReservedVolumeGreaterThanBalance
+import com.lykke.matching.engine.order.OrderStatus.TooSmallVolume
 import com.lykke.matching.engine.order.OrderStatus.UnknownAsset
 import com.lykke.matching.engine.outgoing.messages.JsonSerializable
 import com.lykke.matching.engine.outgoing.messages.MarketOrderWithTrades
@@ -72,7 +73,7 @@ class MarketOrderService(private val backOfficeDatabaseAccessor: BackOfficeDatab
                     Processing.name, Date(message.timestamp), Date(), null, message.straight, message.reservedLimitVolume, fee)
         }
 
-        try {
+        val assetPair = try {
             assetsPairsHolder.getAssetPair(order.assetPairId)
         } catch (e: Exception) {
             order.status = UnknownAsset.name
@@ -82,11 +83,19 @@ class MarketOrderService(private val backOfficeDatabaseAccessor: BackOfficeDatab
             return
         }
 
+        if (!order.checkVolume(assetPair)) {
+            order.status = TooSmallVolume.name
+            rabbitSwapQueue.put(MarketOrderWithTrades(order))
+            LOGGER.info("Too small volume for ${orderInfo(order)}")
+            writeResponse(messageWrapper, order, MessageStatus.TOO_SMALL_VOLUME)
+            return
+        }
+
         val orderBook = genericLimitOrderService.getOrderBook(order.assetPairId).getOrderBook(!order.isBuySide())
         if (orderBook.size == 0) {
             order.status = NoLiquidity.name
             rabbitSwapQueue.put(MarketOrderWithTrades(order))
-            LOGGER.info("No liquidity, no orders in order book, for market order id: ${order.id}}, client: ${order.clientId}, asset: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, straight: ${order.straight}")
+            LOGGER.info("No liquidity, no orders in order book, for ${orderInfo(order)}")
             writeResponse(messageWrapper, order, MessageStatus.NO_LIQUIDITY)
             return
         }
@@ -148,6 +157,8 @@ class MarketOrderService(private val backOfficeDatabaseAccessor: BackOfficeDatab
             totalTime = 0.0
         }
     }
+
+    private fun orderInfo(order: MarketOrder) = "market order id: ${order.id}}, client: ${order.clientId}, asset: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, straight: ${order.straight}"
 
     private fun parseOld(array: ByteArray): ProtocolMessages.OldMarketOrder {
         return ProtocolMessages.OldMarketOrder.parseFrom(array)

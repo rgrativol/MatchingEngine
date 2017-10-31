@@ -1,5 +1,6 @@
 package com.lykke.matching.engine.daos
 
+import com.lykke.matching.engine.holders.AssetsPairsHolder
 import org.nustaq.serialization.annotations.Version
 import java.io.Serializable
 import java.util.Date
@@ -33,4 +34,14 @@ abstract class NewOrder(
     abstract fun takePrice(): Double?
     abstract fun updatePrice(price: Double)
     abstract fun updateRemainingVolume(volume: Double)
+
+    fun checkVolume(assetPair: AssetPair): Boolean {
+        val volume = getAbsVolume()
+        val minVolume = if (isStraight()) assetPair.minVolume else assetPair.minInvertedVolume
+        return minVolume == null || volume >= minVolume
+    }
+
+    fun checkVolume(assetsPairsHolder: AssetsPairsHolder): Boolean {
+        return checkVolume(assetsPairsHolder.getAssetPair(assetPairId))
+    }
 }

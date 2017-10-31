@@ -100,27 +100,26 @@ class SingleLimitOrderService(private val limitOrderService: GenericLimitOrderSe
             }
         }
 
-        if (balance - (reservedBalance - cancelVolume) < limitVolume) {
-            LOGGER.info("Limit order id: ${order.externalId}, client ${order.clientId}, assetPair: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, price: ${RoundingUtils.roundForPrint(order.price)} not enough funds to reserve")
-            order.status = OrderStatus.NotEnoughFunds.name
-            rejectOrder(reservedBalance, cancelVolume, limitAsset, order, balance, limitOrdersReport, orderBook, messageWrapper, MessageStatus.RESERVED_VOLUME_HIGHER_THAN_BALANCE, now)
+        val orderInfo = "Limit order id: ${order.externalId}, client ${order.clientId}, assetPair: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, price: ${RoundingUtils.roundForPrint(order.price)}"
 
-            if (isCancelOrders) {
-                val rabbitOrderBook = OrderBook(order.assetPairId, order.isBuySide(), now, limitOrderService.getOrderBook(order.assetPairId).copy().getOrderBook(order.isBuySide()))
-                orderBookQueue.put(rabbitOrderBook)
-                rabbitOrderBookQueue.put(rabbitOrderBook)
-            }
+        if (!order.checkVolume(assetsPairsHolder))  {
+            LOGGER.info("$orderInfo volume is too small")
+            order.status = OrderStatus.TooSmallVolume.name
+            rejectOrder(reservedBalance, cancelVolume, limitAsset, order, balance, limitOrdersReport, orderBook, messageWrapper, MessageStatus.TOO_SMALL_VOLUME, now, isCancelOrders)
             return
-        } else if (orderBook.leadToNegativeSpreadForClient(order)) {
-            LOGGER.info("Limit order id: ${order.externalId}, client ${order.clientId}, assetPair: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, price: ${RoundingUtils.roundForPrint(order.price)} lead to negative spread")
-            order.status = OrderStatus.LeadToNegativeSpread.name
-            rejectOrder(reservedBalance, cancelVolume, limitAsset, order, balance, limitOrdersReport, orderBook, messageWrapper, MessageStatus.LEAD_TO_NEGATIVE_SPREAD, now)
+        }
 
-            if (isCancelOrders) {
-                val rabbitOrderBook = OrderBook(order.assetPairId, order.isBuySide(), now, limitOrderService.getOrderBook(order.assetPairId).copy().getOrderBook(order.isBuySide()))
-                orderBookQueue.put(rabbitOrderBook)
-                rabbitOrderBookQueue.put(rabbitOrderBook)
-            }
+        if (balance - (reservedBalance - cancelVolume) < limitVolume) {
+            LOGGER.info("$orderInfo not enough funds to reserve")
+            order.status = OrderStatus.NotEnoughFunds.name
+            rejectOrder(reservedBalance, cancelVolume, limitAsset, order, balance, limitOrdersReport, orderBook, messageWrapper, MessageStatus.RESERVED_VOLUME_HIGHER_THAN_BALANCE, now, isCancelOrders)
+            return
+        }
+
+        if (orderBook.leadToNegativeSpreadForClient(order)) {
+            LOGGER.info("$orderInfo lead to negative spread")
+            order.status = OrderStatus.LeadToNegativeSpread.name
+            rejectOrder(reservedBalance, cancelVolume, limitAsset, order, balance, limitOrdersReport, orderBook, messageWrapper, MessageStatus.LEAD_TO_NEGATIVE_SPREAD, now, isCancelOrders)
             return
         }
 
@@ -194,7 +193,7 @@ class SingleLimitOrderService(private val limitOrderService: GenericLimitOrderSe
                 else -> {
                 }
             }
-            LOGGER.info("Limit order id: ${order.externalId}, client ${order.clientId}, assetPair: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, price: ${RoundingUtils.roundForPrint(order.price)} matched")
+            LOGGER.info("$orderInfo matched")
         } else {
             order.reservedLimitVolume = limitVolume
 
@@ -213,7 +212,7 @@ class SingleLimitOrderService(private val limitOrderService: GenericLimitOrderSe
             val rabbitOrderBook = OrderBook(order.assetPairId, order.isBuySide(), now, limitOrderService.getOrderBook(order.assetPairId).copy().getOrderBook(order.isBuySide()))
             orderBookQueue.put(rabbitOrderBook)
             rabbitOrderBookQueue.put(rabbitOrderBook)
-            LOGGER.info("Limit order id: ${order.externalId}, client ${order.clientId}, assetPair: ${order.assetPairId}, volume: ${RoundingUtils.roundForPrint(order.volume)}, price: ${RoundingUtils.roundForPrint(order.price)} added to order book")
+            LOGGER.info("$orderInfo added to order book")
         }
 
         if (messageWrapper.type == MessageType.OLD_LIMIT_ORDER.type) {
@@ -237,7 +236,7 @@ class SingleLimitOrderService(private val limitOrderService: GenericLimitOrderSe
         }
     }
 
-    private fun rejectOrder(reservedBalance: Double, cancelVolume: Double, limitAsset: String, order: NewLimitOrder, balance: Double, limitOrdersReport: LimitOrdersReport, orderBook: AssetOrderBook, messageWrapper: MessageWrapper, status: MessageStatus, now: Date) {
+    private fun rejectOrder(reservedBalance: Double, cancelVolume: Double, limitAsset: String, order: NewLimitOrder, balance: Double, limitOrdersReport: LimitOrdersReport, orderBook: AssetOrderBook, messageWrapper: MessageWrapper, status: MessageStatus, now: Date, isCancelOrders: Boolean) {
         val newReservedBalance = RoundingUtils.parseDouble(reservedBalance - cancelVolume, assetsHolder.getAsset(limitAsset).accuracy).toDouble()
         balancesHolder.updateReservedBalance(order.clientId, limitAsset, newReservedBalance)
         balancesHolder.sendBalanceUpdate(BalanceUpdate(order.externalId, MessageType.LIMIT_ORDER.name, Date(), listOf(ClientBalanceUpdate(order.clientId, limitAsset, balance, balance, reservedBalance, newReservedBalance))))
@@ -253,6 +252,12 @@ class SingleLimitOrderService(private val limitOrderService: GenericLimitOrderSe
 
         if (limitOrdersReport.orders.isNotEmpty()) {
             limitOrderReportQueue.put(limitOrdersReport)
+        }
+
+        if (isCancelOrders) {
+            val rabbitOrderBook = OrderBook(order.assetPairId, order.isBuySide(), now, limitOrderService.getOrderBook(order.assetPairId).copy().getOrderBook(order.isBuySide()))
+            orderBookQueue.put(rabbitOrderBook)
+            rabbitOrderBookQueue.put(rabbitOrderBook)
         }
     }
 

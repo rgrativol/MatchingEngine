@@ -85,6 +85,34 @@ class MultiLimitOrderServiceTest {
     }
 
     @Test
+    fun testSmallVolume() {
+        testBackOfficeDatabaseAccessor.addAsset(Asset("USD", 2))
+        testBackOfficeDatabaseAccessor.addAsset(Asset("EUR", 2))
+        testWalletDatabaseAccessor.addAssetPair(AssetPair("EURUSD", "EUR", "USD", 5, 0.1, 0.2))
+
+        service.processMessage(buildMultiLimitOrderWrapper(pair = "EURUSD", clientId = "Client1",
+                volumes = listOf(
+                        VolumePrice(0.1, 2.0),
+                        VolumePrice(0.1, 1.5),
+                        VolumePrice(0.09, 1.3),
+                        VolumePrice(1.0, 1.2),
+                        VolumePrice(-1.0, 2.1),
+                        VolumePrice(-0.09, 2.2),
+                        VolumePrice(-0.1, 2.4)
+                ),
+                fees = listOf()
+        ))
+        assertEquals(1, limitOrdersQueue.size)
+        val limitOrders = limitOrdersQueue.poll() as LimitOrdersReport
+        assertEquals(5, limitOrders.orders.size)
+        assertEquals(2.0, limitOrders.orders[0].order.price)
+        assertEquals(1.5, limitOrders.orders[1].order.price)
+        assertEquals(1.2, limitOrders.orders[2].order.price)
+        assertEquals(2.1, limitOrders.orders[3].order.price)
+        assertEquals(2.4, limitOrders.orders[4].order.price)
+    }
+
+    @Test
     fun testAddLimitOrder() {
         service.processMessage(buildOldMultiLimitOrderWrapper(pair = "EURUSD", clientId = "Client1", volumes = listOf(VolumePrice(100.0, 1.2), VolumePrice(100.0, 1.3))))
 
